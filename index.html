@@ -892,24 +892,14 @@ function initSampleData(){
     {id:'acc_bank',name:'銀行',balance:50000,currency:'TWD',color:'#42A5F5'},
   ];DB.setAcc(accs);
   DB.setRates({TWD:1,CNY:4.5});
-  const today=TZ.today();const{y,m,d}=TZ.parse(today);
-  const mkDate=(day)=>y+'-'+String(m).padStart(2,'0')+'-'+String(day).padStart(2,'0');
-  const txs=[
-    {id:'tx_s1',type:'expense',amount:120,currency:'TWD',categoryId:'cat_food',accountId:'acc_wallet',note:'午餐',date:mkDate(d),time:'12:30',ts:Date.now()-100},
-    {id:'tx_s2',type:'expense',amount:1500,currency:'TWD',categoryId:'cat_shop',accountId:'acc_wallet',note:'買衣服',date:mkDate(d),time:'15:00',ts:Date.now()-200},
-    {id:'tx_s3',type:'income',amount:5000,currency:'TWD',categoryId:'cat_salary',accountId:'acc_bank',note:'兼職收入',date:mkDate(Math.max(1,d-1)),time:'09:00',ts:Date.now()-300},
-    {id:'tx_s4',type:'expense',amount:80,currency:'TWD',categoryId:'cat_trans',accountId:'acc_wallet',note:'捷運',date:mkDate(Math.max(1,d-1)),time:'08:00',ts:Date.now()-400},
-    {id:'tx_s5',type:'expense',amount:300,currency:'TWD',categoryId:'cat_fun',accountId:'acc_wallet',note:'看電影',date:mkDate(Math.max(1,d-2)),time:'19:00',ts:Date.now()-500},
-    {id:'tx_s6',type:'expense',amount:200,currency:'TWD',categoryId:'cat_food',accountId:'acc_wallet',note:'逾期晚餐',date:mkDate(Math.max(1,d-3)),time:'18:00',ts:Date.now()-600},
-  ];
-  // 同步帳戶餘額
-  txs.forEach(t=>{const a=accs.find(x=>x.id===t.accountId);if(a){if(t.type==='expense')a.balance-=t.amount;else a.balance+=t.amount}});
-  DB.setAcc(accs);DB.setTx(txs.reverse());
+
   DB.setBudget({weekly:{total:3000},monthly:{total:10000},trackedCats:['cat_food','cat_trans','cat_shop','cat_fun','cat_house'],catBudgets:{'cat_food':3000,'cat_shop':2000}});
 }
 // ===== 初始化 =====
 function init(){
-  initSampleData();runScheduledTx();
+  initSampleData();
+  try{const _tx=DB.getTx().filter(t=>!(t&&String(t.id||'').startsWith('tx_s')));DB.setTx(_tx);}catch(e){}
+  runScheduledTx();
   initDetailSelectors();initStatSelectors();
   renderCalendar();renderTodayTodo();checkBackupHint();
   
