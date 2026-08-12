@@ -230,6 +230,7 @@ ul,li{list-style:none}a{text-decoration:none;color:inherit}
 .bp-bar-fill.warn{background:#F5BAC1}
 .bp-bar-fill.over{background:#F5BAC1}
 .bp-remaining{font-size:12px;color:#A04F49;margin-top:4px;text-align:right}
+.bp-remaining-note{font-size:11px;color:var(--orange-500);text-align:right;margin-top:2px;opacity:.85}
 .bp-remaining.over{color:var(--red-500);font-weight:600}
 .trf-flow{display:flex;align-items:center;gap:8px;margin-bottom:14px}
 .trf-flow .trf-acc{flex:1;background:#FBD8D9;border-radius:var(--radius-xs);padding:10px;text-align:center}
@@ -727,6 +728,71 @@ function computeWeekCarry(baseBudget,tracked){
   }
   return{carry:thisAvail-baseBudget,weekSpent:thisWeekSpent,thisAvail:thisAvail,thisStart:cur.start};
 }
+function previewWeeklyBudget(){
+  const wtEl=document.getElementById("bpWeekTotal");
+  if(!wtEl)return;
+  const wt=parseFloat(wtEl.value)||0;
+  const b=DB.getBudget();
+  const tracked=b.trackedCats||[];
+  const yc=computeWeekCarry(wt,tracked);
+  const wu=yc.weekSpent;
+  const wAvailable=yc.thisAvail;
+  // Update only the weekly budget display without re-rendering the whole page
+  const card=document.querySelector("#page-budget .card");
+  if(!card)return;
+  const bpProg=card.querySelector(".budget-progress");
+  if(bpProg){
+    const cls=wAvailable<=0?"ok":wu/wAvailable>1?"over":wu/wAvailable>0.8?"warn":"ok";
+    const pct=wAvailable<=0?0:Math.min(100,Math.round(wu/wAvailable*100));
+    const rem=wAvailable-wu;
+    const usedSpan=bpProg.querySelector(".bp-amount .used");
+    const totalSpan=bpProg.querySelector(".bp-amount .total");
+    const barFill=bpProg.querySelector(".bp-bar-fill");
+    const remainingDiv=bpProg.querySelector(".bp-remaining");
+    if(usedSpan)usedSpan.textContent=FX.fmtTWD(wu);
+    if(totalSpan)totalSpan.textContent=FX.fmtTWD(wAvailable);
+    if(barFill){barFill.className="bp-bar-fill "+cls;barFill.style.width=pct+"%"}
+    if(remainingDiv){remainingDiv.className="bp-remaining "+(rem<0?"over":"");remainingDiv.textContent=(rem>=0?"還可花 "+FX.fmtTWD(rem):"超支 "+FX.fmtTWD(-rem))}
+  }
+  // Update the carry note below
+  const carryDiv=card.querySelector(".bp-remaining-note");
+  if(carryDiv)carryDiv.remove();
+  if(yc.carry!==0&&bpProg){
+    const tag=yc.carry>0?"含上週盈餘結轉 +":"含上週超支扣減 -";
+    const note=document.createElement("div");
+    note.className="bp-remaining-note";
+    note.innerHTML=tag+" "+FX.fmtTWD(Math.abs(yc.carry));
+    bpProg.parentNode.insertBefore(note,bpProg.nextSibling);
+  }
+}
+function previewMonthlyBudget(){
+  const mtEl=document.getElementById("bpMonthTotal");
+  if(!mtEl)return;
+  const mt=parseFloat(mtEl.value)||0;
+  const b=DB.getBudget();
+  const tracked=b.trackedCats||[];
+  const txs=DB.getTx();
+  const y=TZ.nowY(),m=TZ.nowM();
+  let mu=0;
+  txs.forEach(t=>{if(t.type==="expense"&&tracked.includes(t.categoryId)){const p=TZ.parse(t.date);if(p.y===y&&p.m===m){mu+=FX.toTWD(t.amount,t.currency)}}});
+  // Find the month budget card (second .card in budget page)
+  const cards=document.querySelectorAll("#page-budget .card");
+  if(cards.length<2)return;
+  const monthCard=cards[1];
+  const bpProg=monthCard.querySelector(".budget-progress");
+  if(!bpProg)return;
+  const cls=mt<=0?"ok":mu/mt>1?"over":mu/mt>0.8?"warn":"ok";
+  const pct=mt<=0?0:Math.min(100,Math.round(mu/mt*100));
+  const rem=mt-mu;
+  const usedSpan=bpProg.querySelector(".bp-amount .used");
+  const totalSpan=bpProg.querySelector(".bp-amount .total");
+  const barFill=bpProg.querySelector(".bp-bar-fill");
+  const remainingDiv=bpProg.querySelector(".bp-remaining");
+  if(usedSpan)usedSpan.textContent=FX.fmtTWD(mu);
+  if(totalSpan)totalSpan.textContent=FX.fmtTWD(mt);
+  if(barFill){barFill.className="bp-bar-fill "+cls;barFill.style.width=pct+"%"}
+  if(remainingDiv){remainingDiv.className="bp-remaining "+(rem<0?"over":"");remainingDiv.textContent=(rem>=0?"還可花 "+FX.fmtTWD(rem):"超支 "+FX.fmtTWD(-rem))}
+}
 function renderBudget(){
   const b=DB.getBudget(),txs=DB.getTx(),tracked=b.trackedCats||[];
   const wr=TZ.weekRange(),yc=computeWeekCarry(b.weekly?.total||0,tracked);
@@ -734,11 +800,11 @@ function renderBudget(){
   const wAvailable=yc.thisAvail;
   const y=TZ.nowY(),m=TZ.nowM();let mu=0;const cu={};
   txs.forEach(t=>{if(t.type==='expense'&&tracked.includes(t.categoryId)){const p=TZ.parse(t.date);if(p.y===y&&p.m===m){const v=FX.toTWD(t.amount,t.currency);mu+=v;if(b.catBudgets&&b.catBudgets[t.categoryId])cu[t.categoryId]=(cu[t.categoryId]||0)+v}}});
-  let h='<div class="card"><div class="card-title"><div class="left">週預算</div></div><div class="form-group"><label>本週總預算 (TWD)</label><input type="number" id="bpWeekTotal" value="'+(b.weekly?.total||0)+'" step="100" min="0"></div>';
+  let h='<div class="card"><div class="card-title"><div class="left">週預算</div></div><div class="form-group"><label>本週總預算 (TWD)</label><input type="number" id="bpWeekTotal" value="'+(b.weekly?.total||0)+'" step="100" min="0" oninput="previewWeeklyBudget()"></div>';
   h+=renderBp('本週已花',wu,wAvailable);
   if(yc.carry!==0){const tag=yc.carry>0?'含上週盈餘結轉 +':'含上週超支扣減 -';h+='<div class="bp-remaining">'+(wAvailable>=wu?'':' ')+tag+' '+FX.fmtTWD(Math.abs(yc.carry))+'</div>'}
   h+='</div>';
-  h+='<div class="card"><div class="card-title"><div class="left">月預算</div></div><div class="form-group"><label>本月總預算 (TWD)</label><input type="number" id="bpMonthTotal" value="'+(b.monthly?.total||0)+'" step="100" min="0"></div>'+renderBp('本月已花',mu,b.monthly?.total||0)+'</div>';
+  h+='<div class="card"><div class="card-title"><div class="left">月預算</div></div><div class="form-group"><label>本月總預算 (TWD)</label><input type="number" id="bpMonthTotal" value="'+(b.monthly?.total||0)+'" step="100" min="0" oninput="previewMonthlyBudget()"></div>'+renderBp('本月已花',mu,b.monthly?.total||0)+'</div>';
   h+='<div class="card"><div class="card-title"><div class="left">預算追蹤類別</div></div><p style="font-size:12px;color:#A04F49;margin-bottom:8px">勾選的類別支出才會計入預算</p><div id="trackedCatList"></div></div>';
   h+='<div class="card"><div class="card-title"><div class="left">分類預算</div><button class="btn-outline" style="width:auto;padding:4px 10px;font-size:12px" onclick="addCatBudget()">+ 新增</button></div><div id="catBudgetList"></div></div>';
   h+='<button class="btn-primary" onclick="saveBudget()">保存預算</button>';
