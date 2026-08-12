@@ -387,7 +387,7 @@ function navigate(page){
   document.querySelectorAll('.page').forEach(el=>el.classList.remove('active'));
   const target=document.getElementById('page-'+page);
   if(target)target.classList.add('active');
-  if(page==='calendar'){calSelDate=TZ.today();renderCalendar();renderCalDayDetail()}
+  if(page==='calendar'){if(calLastUserSelDate&&calLastUserSelDate.startsWith(calYear+'-'+String(calMonth).padStart(2,'0'))){calSelDate=calLastUserSelDate}else{calSelDate=TZ.today()};renderCalendar();renderCalDayDetail()}
   else if(page==='details')renderDetails();
   else if(page==='stats')renderStats();
   else if(page==='bills')renderBills();
@@ -535,7 +535,7 @@ function doTransfer(f,t,amount,fee,note,date){
 function openTransferModal(){const a=DB.getAcc();if(a.length<2){toast('至少需要2個帳戶');return}const o=a.map(x=>'<option value="'+x.id+'">'+x.name+' ('+x.currency+' '+x.balance+')</option>').join('');document.getElementById('trfFromAcc').innerHTML=o;document.getElementById('trfToAcc').innerHTML=o;if(a.length>=2)document.getElementById('trfToAcc').selectedIndex=1;document.getElementById('trfAmount').value='';document.getElementById('trfFeeAmount').value='0';document.getElementById('trfNote').value='';openOverlay('trfOverlay')}
 function executeTransfer(){const f=document.getElementById('trfFromAcc').value,t=document.getElementById('trfToAcc').value;const amount=parseFloat(document.getElementById('trfAmount').value),fee=parseFloat(document.getElementById('trfFeeAmount').value)||0;const note=document.getElementById('trfNote').value.trim();if(!f||!t){toast('請選擇帳戶');return}if(f===t){toast('轉出和轉入不能相同');return}if(!amount||amount<=0){toast('請輸入金額');return}doTransfer(f,t,amount,fee,note,TZ.today());closeOverlay('trfOverlay')}
 // ===== 月曆 =====
-let calYear=TZ.nowY(),calMonth=TZ.nowM(),calSelDate=TZ.today();
+let calYear=TZ.nowY(),calMonth=TZ.nowM(),calSelDate=TZ.today(),calLastUserSelDate=null;
 function renderCalendar(){
   document.getElementById('calYM').textContent=calYear+'年'+calMonth+'月';
   const firstDay=new Date(calYear,calMonth-1,1).getDay();
@@ -556,10 +556,10 @@ function renderCalendar(){
   for(let d=1;d<=fill;d++)h+='<div class="cal-day other-month"><div class="d-num">'+d+'</div></div>';
   document.getElementById('calGrid').innerHTML=h;renderCalDayDetail()
 }
-function calSelDay(ds){calSelDate=ds;renderCalendar()}
+function calSelDay(ds){calSelDate=ds;calLastUserSelDate=ds;renderCalendar()}
 function calPrevMonth(){calMonth--;if(calMonth<1){calMonth=12;calYear--}renderCalendar()}
 function calNextMonth(){calMonth++;if(calMonth>12){calMonth=1;calYear++}renderCalendar()}
-function calGoToday(){calYear=TZ.nowY();calMonth=TZ.nowM();calSelDate=TZ.today();renderCalendar()}
+function calGoToday(){calYear=TZ.nowY();calMonth=TZ.nowM();calSelDate=TZ.today();calLastUserSelDate=calSelDate;renderCalendar()}
 function renderCalDayDetail(){
   const ds=calSelDate,{y,m,d}=TZ.parse(ds);
   const wdNames=['日','一','二','三','四','五','六'];
