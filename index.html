@@ -355,7 +355,9 @@ const TZ={
   parse(s){if(!s)return{y:0,m:0,d:0};const m=(''+s).match(/(\d{4})-?(\d{2})-?(\d{2})/);return m?{y:+m[1],m:+m[2],d:+m[3]}:{y:0,m:0,d:0}},
   weekRange(){const d=this.now();const wd=d.getDay();const diff=wd===0?6:wd-1;const mon=new Date(d);mon.setDate(d.getDate()-diff);const sun=new Date(mon);sun.setDate(mon.getDate()+6);const f=x=>x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');return{start:f(mon),end:f(sun)}},
   weekStart(s){const p=this.parse(s);if(!p.y)return s;const d=new Date(p.y,p.m-1,p.d);const wd=d.getDay();const diff=wd===0?6:wd-1;d.setDate(d.getDate()-diff);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')},
-  addDays(s,n){const p=this.parse(s);const d=new Date(p.y,p.m-1,p.d);d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')}
+  addDays(s,n){const p=this.parse(s);const d=new Date(p.y,p.m-1,p.d);d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')},
+  monthStart(s){const p=this.parse(s);return p.y+'-'+String(p.m).padStart(2,'0')+'-01'},
+  addMonths(s,n){const p=this.parse(s);if(!p.y)return s;let m=p.m+n,y=p.y;while(m>12){m-=12;y++}while(m<1){m+=12;y--}return y+'-'+String(m).padStart(2,'0')+'-01'}
 };
 const DB={
   _g(k,def){const v=localStorage.getItem(P+k);return v==null?def:JSON.parse(v)},
@@ -768,6 +770,27 @@ function computeWeekCarry(tracked,bOverride){
   }
   return{carry:thisAvail-getWeeklyBudget(cur.start,b),weekSpent:thisWeekSpent,thisAvail:thisAvail,thisStart:cur.start};
 }
+
+function computeMonthCarry(tracked,bOverride){
+  const b=bOverride||DB.getBudget();
+  const txs=DB.getTx();
+  const txsInScope=txs.filter(t=>t.type==='expense'&&inBudget(t,b));
+  const curYM=TZ.monthStart(TZ.today());
+  if(txsInScope.length===0)return{carry:0,monthSpent:0,thisAvail:getMonthlyBudget(curYM,b),thisStart:curYM};
+  const firstMonthStart=TZ.monthStart(txsInScope.map(t=>t.date).sort()[0]);
+  const monthSpentMap={};
+  txsInScope.forEach(t=>{const ms=TZ.monthStart(t.date);monthSpentMap[ms]=(monthSpentMap[ms]||0)+FX.toTWD(t.amount,t.currency)});
+  let carry=0,ms=firstMonthStart,thisAvail=0,thisMonthSpent=0;
+  while(ms<=curYM){
+    const spent=monthSpentMap[ms]||0;
+    const available=getMonthlyBudget(ms,b)+carry;
+    if(ms===curYM){thisMonthSpent=spent;thisAvail=available;}
+    carry=available-spent;
+    if(Math.abs(carry)>1e9)break;
+    ms=TZ.addMonths(ms,1);
+  }
+  return{carry:thisAvail-getMonthlyBudget(curYM,b),monthSpent:thisMonthSpent,thisAvail:thisAvail,thisStart:curYM};
+}
 function previewWeeklyBudget(){
   const wtEl=document.getElementById("bpWeekTotal");
   if(!wtEl)return;
@@ -819,28 +842,35 @@ function previewMonthlyBudget(){
   const editedB=buildBudgetAfterEdit(wt,mt,scopeWk,scopeMo);
   const b=DB.getBudget();
   const tracked=b.trackedCats||[];
-  const txs=DB.getTx();
-  const y=TZ.nowY(),m=TZ.nowM();
-  let mu=0;
-  txs.forEach(t=>{if(t.type==="expense"&&inBudget(t)){const p=TZ.parse(t.date);if(p.y===y&&p.m===m){mu+=FX.toTWD(t.amount,t.currency)}}});
-  const mTotal=getMonthlyBudget(y+'-'+String(m).padStart(2,'0')+'-01',editedB);
-  // Find the month budget card (second .card in budget page)
+  const mc=computeMonthCarry(tracked,editedB);
+  const mu=mc.monthSpent;
+  const mAvailable=mc.thisAvail;
   const cards=document.querySelectorAll("#page-budget .card");
   if(cards.length<2)return;
   const monthCard=cards[1];
   const bpProg=monthCard.querySelector(".budget-progress");
   if(!bpProg)return;
-  const cls=mTotal<=0?"ok":mu/mTotal>1?"over":mu/mTotal>0.8?"warn":"ok";
-  const pct=mTotal<=0?0:Math.min(100,Math.round(mu/mTotal*100));
-  const rem=mTotal-mu;
+  const cls=mAvailable<=0?"ok":mu/mAvailable>1?"over":mu/mAvailable>0.8?"warn":"ok";
+  const pct=mAvailable<=0?0:Math.min(100,Math.round(mu/mAvailable*100));
+  const rem=mAvailable-mu;
   const usedSpan=bpProg.querySelector(".bp-amount .used");
   const totalSpan=bpProg.querySelector(".bp-amount .total");
   const barFill=bpProg.querySelector(".bp-bar-fill");
   const remainingDiv=bpProg.querySelector(".bp-remaining");
   if(usedSpan)usedSpan.textContent=FX.fmtTWD(mu);
-  if(totalSpan)totalSpan.textContent=FX.fmtTWD(mTotal);
+  if(totalSpan)totalSpan.textContent=FX.fmtTWD(mAvailable);
   if(barFill){barFill.className="bp-bar-fill "+cls;barFill.style.width=pct+"%"}
   if(remainingDiv){remainingDiv.className="bp-remaining "+(rem<0?"over":"");remainingDiv.textContent=(rem>=0?"還可花 "+FX.fmtTWD(rem):"超支 "+FX.fmtTWD(-rem))}
+  // 月份結轉註記
+  const oldCarry=monthCard.querySelector(".bp-remaining-note");
+  if(oldCarry)oldCarry.remove();
+  if(mc.carry!==0&&bpProg){
+    const tag=mc.carry>0?"含上月盈餘結轉 +":"含上月超支扣減 -";
+    const note=document.createElement("div");
+    note.className="bp-remaining-note";
+    note.innerHTML=tag+" "+FX.fmtTWD(Math.abs(mc.carry));
+    bpProg.parentNode.insertBefore(note,bpProg.nextSibling);
+  }
 }
 function renderBudget(){
   const b=DB.getBudget(),txs=DB.getTx(),tracked=b.trackedCats||[];
@@ -853,7 +883,10 @@ function renderBudget(){
   h+=renderBp('本週已花',wu,wAvailable);
   if(yc.carry!==0){const tag=yc.carry>0?'含上週盈餘結轉 +':'含上週超支扣減 -';h+='<div class="bp-remaining">'+(wAvailable>=wu?'':' ')+tag+' '+FX.fmtTWD(Math.abs(yc.carry))+'</div>'}
   h+='</div>';
-  h+='<div class="card"><div class="card-title"><div class="left">月預算</div></div><div class="form-group"><label>本月總預算 (TWD)</label><input type="number" id="bpMonthTotal" value="'+(b.monthly?.total||0)+'" step="100" min="0" oninput="previewMonthlyBudget()"><div class="scope-row"><span class="scope-label">套用範圍</span><label class="scope-opt"><input type="radio" name="moScope" value="this" checked onchange="previewMonthlyBudget()">只從本月開始</label><label class="scope-opt"><input type="radio" name="moScope" value="all" onchange="previewMonthlyBudget()">全部月數</label></div></div>'+renderBp('本月已花',mu,getMonthlyBudget(TZ.nowY()+'-'+String(TZ.nowM()).padStart(2,'0')+'-01'))+'</div>';
+  const mc=computeMonthCarry(tracked);
+  h+='<div class="card"><div class="card-title"><div class="left">月預算</div></div><div class="form-group"><label>本月總預算 (TWD)</label><input type="number" id="bpMonthTotal" value="'+(b.monthly?.total||0)+'" step="100" min="0" oninput="previewMonthlyBudget()"><div class="scope-row"><span class="scope-label">套用範圍</span><label class="scope-opt"><input type="radio" name="moScope" value="this" checked onchange="previewMonthlyBudget()">只從本月開始</label><label class="scope-opt"><input type="radio" name="moScope" value="all" onchange="previewMonthlyBudget()">全部月數</label></div></div>'+renderBp('本月已花',mc.monthSpent,mc.thisAvail);
+  if(mc.carry!==0){const mtag=mc.carry>0?'含上月盈餘結轉 +':'含上月超支扣減 -';h+='<div class="bp-remaining-note">'+mtag+' '+FX.fmtTWD(Math.abs(mc.carry))+'</div>'}
+  h+='</div>';
   h+='<div class="card"><div class="card-title"><div class="left">預算追蹤類別</div></div><p style="font-size:12px;color:#A04F49;margin-bottom:8px">勾選的類別支出才會計入預算。切換開關只從「今天」起生效：打開前的歷史不補計，關閉前的已計入支出不取消。</p><div id="trackedCatList"></div></div>';
   h+='<div class="card"><div class="card-title"><div class="left">分類預算</div><button class="btn-outline" style="width:auto;padding:4px 10px;font-size:12px" onclick="addCatBudget()">+ 新增</button></div><div id="catBudgetList"></div></div>';
   h+='<button class="btn-primary" onclick="saveBudget()">保存預算</button>';
