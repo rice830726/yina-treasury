@@ -360,7 +360,8 @@ const TZ={
   addDays(s,n){const p=this.parse(s);const d=new Date(p.y,p.m-1,p.d);d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')},
   monthStart(s){const p=this.parse(s);return p.y+'-'+String(p.m).padStart(2,'0')+'-01'},
   addMonths(s,n){const p=this.parse(s);if(!p.y)return s;let m=p.m+n,y=p.y;while(m>12){m-=12;y++}while(m<1){m+=12;y--}return y+'-'+String(m).padStart(2,'0')+'-01'},
-  sundaysOfMonth(y,m){const days=[];for(let d=1;d<=31;d++){const dt=new Date(y,m-1,d);if(dt.getMonth()!==m-1)break;if(dt.getDay()===0)days.push(dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0'))}return days}
+  sundaysOfMonth(y,m){const days=[];for(let d=1;d<=31;d++){const dt=new Date(y,m-1,d);if(dt.getMonth()!==m-1)break;if(dt.getDay()===0)days.push(dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0'))}return days},
+  monthsOfYear(y){const arr=[];for(let m=1;m<=12;m++)arr.push(y+'-'+String(m).padStart(2,'0'));return arr}
 };
 const DB={
   _g(k,def){const v=localStorage.getItem(P+k);return v==null?def:JSON.parse(v)},
@@ -783,11 +784,18 @@ function computeMonthCarry(tracked,bOverride){
   const txs=DB.getTx();
   const txsInScope=txs.filter(t=>t.type==='expense'&&inBudget(t,b));
   const curYM=TZ.monthStart(TZ.today());
-  if(txsInScope.length===0)return{carry:0,monthSpent:0,thisAvail:getMonthlyBudget(curYM,b),thisStart:curYM};
+  // 起始月（若用户未指定，默认今年1月）
+  const curY=TZ.nowY();
+  const defaultStart=curY+'-01-01';
+  const monthStartStr=(b.monthStartByYear&&b.monthStartByYear[curY])||defaultStart;
+  const monthStart=TZ.monthStart(monthStartStr);
+  if(txsInScope.length===0)return{carry:0,monthSpent:0,thisAvail:getMonthlyBudget(curYM,b),thisStart:curYM,monthStartStr:monthStartStr};
   const firstMonthStart=TZ.monthStart(txsInScope.map(t=>t.date).sort()[0]);
+  // loopStart 取「最早有支出的月」与「起始月」的较大值，確保起始月之前的月份不算結轉累積
+  const loopStart=firstMonthStart<monthStart?monthStart:firstMonthStart;
   const monthSpentMap={};
   txsInScope.forEach(t=>{const ms=TZ.monthStart(t.date);monthSpentMap[ms]=(monthSpentMap[ms]||0)+FX.toTWD(t.amount,t.currency)});
-  let carry=0,ms=firstMonthStart,thisAvail=0,thisMonthSpent=0;
+  let carry=0,ms=loopStart,thisAvail=0,thisMonthSpent=0;
   while(ms<=curYM){
     const spent=monthSpentMap[ms]||0;
     const available=getMonthlyBudget(ms,b)+carry;
@@ -796,7 +804,7 @@ function computeMonthCarry(tracked,bOverride){
     if(Math.abs(carry)>1e9)break;
     ms=TZ.addMonths(ms,1);
   }
-  return{carry:thisAvail-getMonthlyBudget(curYM,b),monthSpent:thisMonthSpent,thisAvail:thisAvail,thisStart:curYM};
+  return{carry:thisAvail-getMonthlyBudget(curYM,b),monthSpent:thisMonthSpent,thisAvail:thisAvail,thisStart:curYM,monthStartStr:monthStartStr};
 }
 function previewWeeklyBudget(){
   const wtEl=document.getElementById("bpWeekTotal");
@@ -900,7 +908,14 @@ function renderBudget(){
   if(yc.carry!==0){const tag=yc.carry>0?'含上週盈餘結轉 +':'含上週超支扣減 -';h+='<div class="bp-remaining">'+(wAvailable>=wu?'':' ')+tag+' '+FX.fmtTWD(Math.abs(yc.carry))+'</div>'}
   h+='</div>';
   const mc=computeMonthCarry(tracked);
-  h+='<div class="card"><div class="card-title"><div class="left">月預算</div></div><div class="form-group"><label>本月總預算 (TWD)</label><input type="number" id="bpMonthTotal" value="'+(b.monthly?.total||0)+'" step="100" min="0" oninput="previewMonthlyBudget()"><div class="scope-row"><span class="scope-label">套用範圍</span><label class="scope-opt"><input type="radio" name="moScope" value="this" checked onchange="previewMonthlyBudget()">只從本月開始</label><label class="scope-opt"><input type="radio" name="moScope" value="all" onchange="previewMonthlyBudget()">全部月數</label></div></div>'+renderBp('本月已花',mc.monthSpent,mc.thisAvail);
+  // 起始月 select 用的去年+今年月份列表
+  const prevMoY=curY-1;
+  const prevYMs=TZ.monthsOfYear(prevMoY);
+  const curYMs=TZ.monthsOfYear(curY);
+  const savedMoStart=(b.monthStartByYear&&b.monthStartByYear[curY])||(curY+'-01-01');
+  const allMs=[...prevYMs,...curYMs];
+  const moStartOptions=allMs.map(m=>{const ym=m+'-01';const lbl=parseInt(m.substring(5,7),10)+'月';return '<option value="'+ym+'" '+(ym===savedMoStart?'selected':'')+'>'+lbl+(m.indexOf((prevMoY+'-'))===0?' (去年)':'')+'</option>'}).join('');
+  h+='<div class="card"><div class="card-title"><div class="left">月預算</div></div><div class="form-group"><label>本月總預算 (TWD)</label><input type="number" id="bpMonthTotal" value="'+(b.monthly?.total||0)+'" step="100" min="0" oninput="previewMonthlyBudget()"><div class="scope-row"><span class="scope-label">套用範圍</span><label class="scope-opt"><input type="radio" name="moScope" value="this" checked onchange="previewMonthlyBudget()">只從本月開始</label><label class="scope-opt"><input type="radio" name="moScope" value="all" onchange="previewMonthlyBudget()">全部月數</label><span class="scope-label" style="margin-left:auto">起始月</span><select id="bpMonthStart" onchange="saveMonthStart()" style="font-size:12px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:6px;background:white">'+moStartOptions+'</select></div><div style="font-size:11px;color:var(--gray-500);margin-top:2px">之前的月份不算入結轉累積</div></div>'+renderBp('本月已花',mc.monthSpent,mc.thisAvail);
   if(mc.carry!==0){const mtag=mc.carry>0?'含上月盈餘結轉 +':'含上月超支扣減 -';h+='<div class="bp-remaining-note">'+mtag+' '+FX.fmtTWD(Math.abs(mc.carry))+'</div>'}
   h+='</div>';
   h+='<div class="card"><div class="card-title"><div class="left">預算追蹤類別</div></div><p style="font-size:12px;color:#A04F49;margin-bottom:8px">勾選的類別支出才會計入預算。切換開關只從「今天」起生效：打開前的歷史不補計，關閉前的已計入支出不取消。</p><div id="trackedCatList"></div></div>';
@@ -931,6 +946,19 @@ function saveWeekStart(){
   DB.setBudget(b);
   renderBudget();
   toast('起始週已更新');
+}
+function saveMonthStart(){
+  const el=document.getElementById('bpMonthStart');
+  if(!el)return;
+  const v=el.value;
+  if(!v)return;
+  const b=DB.getBudget();
+  b.monthStartByYear=b.monthStartByYear||{};
+  const curY=TZ.nowY();
+  b.monthStartByYear[curY]=v;
+  DB.setBudget(b);
+  renderBudget();
+  toast('起始月份已更新');
 }
 function saveBudget(){
   const wt=parseFloat(document.getElementById('bpWeekTotal').value)||0,mt=parseFloat(document.getElementById('bpMonthTotal').value)||0;
