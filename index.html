@@ -312,6 +312,10 @@ ul,li{list-style:none}a{text-decoration:none;color:inherit}
 .fab.show{display:flex}
 
 
+.scope-row{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.scope-label{font-size:12px;color:#A04F49;font-weight:600}
+.scope-opt{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:#7a5a55;cursor:pointer;user-select:none}
+.scope-opt input{accent-color:#FBD8D9;width:14px;height:14px;margin:0}
 </style>
 </head>
 <body>
@@ -707,18 +711,45 @@ function openAccDetail(id){
 function openRateModal(){const r=DB.getRates();document.getElementById('rateCNY').value=r.CNY||4.5;document.getElementById('rateCNYPreview').textContent=r.CNY||4.5;document.getElementById('rateCNY').oninput=function(){document.getElementById('rateCNYPreview').textContent=this.value||4.5};openOverlay('rateOverlay')}
 function saveRates(){const c=parseFloat(document.getElementById('rateCNY').value);if(!c||c<=0){toast('請輸入有效匯率');return}DB.setRates({TWD:1,CNY:c});toast('匯率已保存');closeOverlay('rateOverlay');refreshAll()}
 // ===== 預算 =====
-function inBudget(tx){
-  const b=DB.getBudget();
+function inBudget(tx,bOverride){
+  const b=bOverride||DB.getBudget();
   const tracked=b.trackedCats||[];
   const enabled=tracked.includes(tx.categoryId);
   const since=(b.catBudgetSince&&b.catBudgetSince[tx.categoryId])||'1970-01-01';
   return (tx.date>=since)===enabled;
 }
-function computeWeekCarry(baseBudget,tracked){
+function getWeeklyBudget(ws,bOverride){
+  const b=bOverride||DB.getBudget();
+  let total=(b.weeklyBase!=null)?b.weeklyBase:(b.weekly?.total||0);
+  const hist=(b.weeklyHistory||[]).slice().sort((a,c)=>a.since<c.since?-1:(a.since>c.since?1:0));
+  for(const rec of hist){if(rec.since<=ws)total=rec.total}
+  return total;
+}
+function getMonthlyBudget(ym,bOverride){
+  const b=bOverride||DB.getBudget();
+  let total=(b.monthlyBase!=null)?b.monthlyBase:(b.monthly?.total||0);
+  const hist=(b.monthlyHistory||[]).slice().sort((a,c)=>a.since<c.since?-1:(a.since>c.since?1:0));
+  for(const rec of hist){if(rec.since<=ym)total=rec.total}
+  return total;
+}
+function getScope(name,dflt){const el=document.querySelector('input[name="'+name+'"]:checked');return el?el.value:dflt;}
+function buildBudgetAfterEdit(wt,mt,scopeWk,scopeMo){
+  const b=JSON.parse(JSON.stringify(DB.getBudget()));
+  const curMonday=TZ.weekRange().start;
+  const curMonthFirst=TZ.nowY()+'-'+String(TZ.nowM()).padStart(2,'0')+'-01';
+  if(scopeWk==='all'){b.weeklyBase=wt;b.weeklyHistory=[]}
+  else{b.weeklyBase=(b.weeklyBase!=null)?b.weeklyBase:(b.weekly?.total||0);b.weeklyHistory=b.weeklyHistory||[];const last=b.weeklyHistory[b.weeklyHistory.length-1];if(last&&last.since===curMonday)last.total=wt;else b.weeklyHistory.push({since:curMonday,total:wt})}
+  if(scopeMo==='all'){b.monthlyBase=mt;b.monthlyHistory=[]}
+  else{b.monthlyBase=(b.monthlyBase!=null)?b.monthlyBase:(b.monthly?.total||0);b.monthlyHistory=b.monthlyHistory||[];const last=b.monthlyHistory[b.monthlyHistory.length-1];if(last&&last.since===curMonthFirst)last.total=mt;else b.monthlyHistory.push({since:curMonthFirst,total:mt})}
+  b.weekly={total:wt};b.monthly={total:mt};
+  return b;
+}
+function computeWeekCarry(tracked,bOverride){
+  const b=bOverride||DB.getBudget();
   // 算出所有有支出的周的周一日期
   const txs=DB.getTx();
-  const txsInScope=txs.filter(t=>t.type==='expense'&&inBudget(t));
-  if(txsInScope.length===0)return{carry:0,weekSpent:0,thisAvail:baseBudget,thisStart:TZ.weekRange().start};
+  const txsInScope=txs.filter(t=>t.type==='expense'&&inBudget(t,b));
+  if(txsInScope.length===0)return{carry:0,weekSpent:0,thisAvail:getWeeklyBudget(TZ.weekRange().start,b),thisStart:TZ.weekRange().start};
   const cur=TZ.weekRange();
   const firstWeekStart=TZ.weekStart(txsInScope.map(t=>t.date).sort()[0]);
   // 从 firstWeekStart 迭代到 cur.start（用 addDays +7 检查）
@@ -726,24 +757,28 @@ function computeWeekCarry(baseBudget,tracked){
   const weekSpentMap={};
   txsInScope.forEach(t=>{const ws=TZ.weekStart(t.date);weekSpentMap[ws]=(weekSpentMap[ws]||0)+FX.toTWD(t.amount,t.currency)});
   // 滚动迭代
-  let carry=0,ws=firstWeekStart,thisAvail=baseBudget,thisWeekSpent=0;
+  let carry=0,ws=firstWeekStart,thisAvail=0,thisWeekSpent=0;
   while(ws<=cur.start){
     const spent=weekSpentMap[ws]||0;
-    const available=baseBudget+carry;
+    const available=getWeeklyBudget(ws,b)+carry;
     if(ws===cur.start){thisWeekSpent=spent;thisAvail=available}
     carry=available-spent;
     if(carry>1e9)break;// 防御
     ws=TZ.addDays(ws,7);
   }
-  return{carry:thisAvail-baseBudget,weekSpent:thisWeekSpent,thisAvail:thisAvail,thisStart:cur.start};
+  return{carry:thisAvail-getWeeklyBudget(cur.start,b),weekSpent:thisWeekSpent,thisAvail:thisAvail,thisStart:cur.start};
 }
 function previewWeeklyBudget(){
   const wtEl=document.getElementById("bpWeekTotal");
   if(!wtEl)return;
   const wt=parseFloat(wtEl.value)||0;
+  const mtEl=document.getElementById("bpMonthTotal");
+  const mt=mtEl?parseFloat(mtEl.value)||0:0;
+  const scopeWk=getScope("wkScope","this"),scopeMo=getScope("moScope","this");
+  const editedB=buildBudgetAfterEdit(wt,mt,scopeWk,scopeMo);
   const b=DB.getBudget();
   const tracked=b.trackedCats||[];
-  const yc=computeWeekCarry(wt,tracked);
+  const yc=computeWeekCarry(tracked,editedB);
   const wu=yc.weekSpent;
   const wAvailable=yc.thisAvail;
   // Update only the weekly budget display without re-rendering the whole page
@@ -778,42 +813,47 @@ function previewMonthlyBudget(){
   const mtEl=document.getElementById("bpMonthTotal");
   if(!mtEl)return;
   const mt=parseFloat(mtEl.value)||0;
+  const wtEl=document.getElementById("bpWeekTotal");
+  const wt=wtEl?parseFloat(wtEl.value)||0:0;
+  const scopeWk=getScope("wkScope","this"),scopeMo=getScope("moScope","this");
+  const editedB=buildBudgetAfterEdit(wt,mt,scopeWk,scopeMo);
   const b=DB.getBudget();
   const tracked=b.trackedCats||[];
   const txs=DB.getTx();
   const y=TZ.nowY(),m=TZ.nowM();
   let mu=0;
   txs.forEach(t=>{if(t.type==="expense"&&inBudget(t)){const p=TZ.parse(t.date);if(p.y===y&&p.m===m){mu+=FX.toTWD(t.amount,t.currency)}}});
+  const mTotal=getMonthlyBudget(y+'-'+String(m).padStart(2,'0')+'-01',editedB);
   // Find the month budget card (second .card in budget page)
   const cards=document.querySelectorAll("#page-budget .card");
   if(cards.length<2)return;
   const monthCard=cards[1];
   const bpProg=monthCard.querySelector(".budget-progress");
   if(!bpProg)return;
-  const cls=mt<=0?"ok":mu/mt>1?"over":mu/mt>0.8?"warn":"ok";
-  const pct=mt<=0?0:Math.min(100,Math.round(mu/mt*100));
-  const rem=mt-mu;
+  const cls=mTotal<=0?"ok":mu/mTotal>1?"over":mu/mTotal>0.8?"warn":"ok";
+  const pct=mTotal<=0?0:Math.min(100,Math.round(mu/mTotal*100));
+  const rem=mTotal-mu;
   const usedSpan=bpProg.querySelector(".bp-amount .used");
   const totalSpan=bpProg.querySelector(".bp-amount .total");
   const barFill=bpProg.querySelector(".bp-bar-fill");
   const remainingDiv=bpProg.querySelector(".bp-remaining");
   if(usedSpan)usedSpan.textContent=FX.fmtTWD(mu);
-  if(totalSpan)totalSpan.textContent=FX.fmtTWD(mt);
+  if(totalSpan)totalSpan.textContent=FX.fmtTWD(mTotal);
   if(barFill){barFill.className="bp-bar-fill "+cls;barFill.style.width=pct+"%"}
   if(remainingDiv){remainingDiv.className="bp-remaining "+(rem<0?"over":"");remainingDiv.textContent=(rem>=0?"還可花 "+FX.fmtTWD(rem):"超支 "+FX.fmtTWD(-rem))}
 }
 function renderBudget(){
   const b=DB.getBudget(),txs=DB.getTx(),tracked=b.trackedCats||[];
-  const wr=TZ.weekRange(),yc=computeWeekCarry(b.weekly?.total||0,tracked);
+  const wr=TZ.weekRange(),yc=computeWeekCarry(tracked);
   const wu=yc.weekSpent;
   const wAvailable=yc.thisAvail;
   const y=TZ.nowY(),m=TZ.nowM();let mu=0;const cu={};
   txs.forEach(t=>{if(t.type==='expense'&&inBudget(t)){const p=TZ.parse(t.date);if(p.y===y&&p.m===m){const v=FX.toTWD(t.amount,t.currency);mu+=v;if(b.catBudgets&&b.catBudgets[t.categoryId])cu[t.categoryId]=(cu[t.categoryId]||0)+v}}});
-  let h='<div class="card"><div class="card-title"><div class="left">週預算</div></div><div class="form-group"><label>本週總預算 (TWD)</label><input type="number" id="bpWeekTotal" value="'+(b.weekly?.total||0)+'" step="100" min="0" oninput="previewWeeklyBudget()"></div>';
+  let h='<div class="card"><div class="card-title"><div class="left">週預算</div></div><div class="form-group"><label>本週總預算 (TWD)</label><input type="number" id="bpWeekTotal" value="'+(b.weekly?.total||0)+'" step="100" min="0" oninput="previewWeeklyBudget()"><div class="scope-row"><span class="scope-label">套用範圍</span><label class="scope-opt"><input type="radio" name="wkScope" value="this" checked onchange="previewWeeklyBudget()">只從本週開始</label><label class="scope-opt"><input type="radio" name="wkScope" value="all" onchange="previewWeeklyBudget()">全部週數</label></div></div>';
   h+=renderBp('本週已花',wu,wAvailable);
   if(yc.carry!==0){const tag=yc.carry>0?'含上週盈餘結轉 +':'含上週超支扣減 -';h+='<div class="bp-remaining">'+(wAvailable>=wu?'':' ')+tag+' '+FX.fmtTWD(Math.abs(yc.carry))+'</div>'}
   h+='</div>';
-  h+='<div class="card"><div class="card-title"><div class="left">月預算</div></div><div class="form-group"><label>本月總預算 (TWD)</label><input type="number" id="bpMonthTotal" value="'+(b.monthly?.total||0)+'" step="100" min="0" oninput="previewMonthlyBudget()"></div>'+renderBp('本月已花',mu,b.monthly?.total||0)+'</div>';
+  h+='<div class="card"><div class="card-title"><div class="left">月預算</div></div><div class="form-group"><label>本月總預算 (TWD)</label><input type="number" id="bpMonthTotal" value="'+(b.monthly?.total||0)+'" step="100" min="0" oninput="previewMonthlyBudget()"><div class="scope-row"><span class="scope-label">套用範圍</span><label class="scope-opt"><input type="radio" name="moScope" value="this" checked onchange="previewMonthlyBudget()">只從本月開始</label><label class="scope-opt"><input type="radio" name="moScope" value="all" onchange="previewMonthlyBudget()">全部月數</label></div></div>'+renderBp('本月已花',mu,getMonthlyBudget(TZ.nowY()+'-'+String(TZ.nowM()).padStart(2,'0')+'-01'))+'</div>';
   h+='<div class="card"><div class="card-title"><div class="left">預算追蹤類別</div></div><p style="font-size:12px;color:#A04F49;margin-bottom:8px">勾選的類別支出才會計入預算。切換開關只從「今天」起生效：打開前的歷史不補計，關閉前的已計入支出不取消。</p><div id="trackedCatList"></div></div>';
   h+='<div class="card"><div class="card-title"><div class="left">分類預算</div><button class="btn-outline" style="width:auto;padding:4px 10px;font-size:12px" onclick="addCatBudget()">+ 新增</button></div><div id="catBudgetList"></div></div>';
   h+='<button class="btn-primary" onclick="saveBudget()">保存預算</button>';
@@ -835,7 +875,9 @@ function saveBudget(){
   const tracked=[];const expCats=DB.getCat().filter(c=>c.type==='expense');
   document.querySelectorAll('#trackedCatList .setting-item').forEach((item,i)=>{if(item.querySelector('.sch-toggle').classList.contains('on')){if(expCats[i])tracked.push(expCats[i].id)}});
   const cb={};document.querySelectorAll('[data-catbudget]').forEach(inp=>{cb[inp.dataset.catbudget]=parseFloat(inp.value)||0});
-  const b=DB.getBudget();b.weekly={total:wt};b.monthly={total:mt};b.trackedCats=tracked;b.catBudgets=cb;DB.setBudget(b);
+  const scopeWk=getScope("wkScope","this"),scopeMo=getScope("moScope","this");
+  const b=buildBudgetAfterEdit(wt,mt,scopeWk,scopeMo);
+  b.trackedCats=tracked;b.catBudgets=cb;DB.setBudget(b);
   toast('預算已保存');renderBudget();refreshAll()
 }
 // ===== 定時記帳 =====
@@ -911,12 +953,13 @@ function renderTodayTodo(){
     if(s.cycle==='bimonthly'&&cD>s.day){const __base=s.startDate?TZ.parse(s.startDate):null;let __ok=false;if(__base){const __m=(cY-__base.y)*12+(cM-__base.m);__ok=__m>=0&&__m%2===0;}else{const created=s.createdMonth?TZ.parse(s.createdMonth+'-01'):null;if(created){const months=(cY-created.y)*12+(cM-created.m);__ok=months%2===0;}}if(__ok){const lk=s.lastRun?s.lastRun.substring(0,7):null;const ck=cY+'-'+String(cM).padStart(2,'0');if(lk!==ck)items.push({type:'逾期定時記帳',name:(DB.getCat().find(c=>c.id===s.categoryId)||{}).name||'未知',tag:'逾期',action:'runScheduledTx'})}}
   });
   // 預算超支提醒
-  const b=DB.getBudget();const tracked=b.trackedCats||[];
-  if(b.monthly&&b.monthly.total>0){
+  const b=DB.getBudget();
+  const mTotal=getMonthlyBudget(cY+'-'+String(cM).padStart(2,'0')+'-01');
+  if(mTotal>0){
     const txs=DB.getTx();let mu=0;
-    txs.forEach(t=>{if(t.type==='expense'&&tracked.includes(t.categoryId)){const p=TZ.parse(t.date);if(p.y===cY&&p.m===cM)mu+=FX.toTWD(t.amount,t.currency)}});
-    if(mu>b.monthly.total)items.push({type:'預算超支',name:'月預算已超支 '+FX.fmtTWD(mu-b.monthly.total),tag:'超支',warn:true});
-    else if(mu>b.monthly.total*0.8)items.push({type:'預算提醒',name:'月預算已用 '+Math.round(mu/b.monthly.total*100)+'%',tag:'提醒',warn:true});
+    txs.forEach(t=>{if(t.type==='expense'&&inBudget(t)){const p=TZ.parse(t.date);if(p.y===cY&&p.m===cM)mu+=FX.toTWD(t.amount,t.currency)}});
+    if(mu>mTotal)items.push({type:'預算超支',name:'月預算已超支 '+FX.fmtTWD(mu-mTotal),tag:'超支',warn:true});
+    else if(mu>mTotal*0.8)items.push({type:'預算提醒',name:'月預算已用 '+Math.round(mu/mTotal*100)+'%',tag:'提醒',warn:true});
   }
   if(items.length===0){el.classList.remove('show');return}
   el.classList.add('show');
