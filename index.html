@@ -306,9 +306,10 @@ ul,li{list-style:none}a{text-decoration:none;color:inherit}
 
 
 
-.fab{position:fixed;bottom:calc(20px + var(--safe-bottom));right:20px;width:56px;height:56px;border-radius:50%;background:#FBD8D9;display:flex;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(255,92,141,.4);z-index:99;cursor:pointer}
+.fab{position:fixed;bottom:calc(20px + var(--safe-bottom));right:20px;width:56px;height:56px;border-radius:50%;background:#FBD8D9;display:none;align-items:center;justify-content:center;box-shadow:0 4px 12px rgba(255,92,141,.4);z-index:99;cursor:pointer}
 .fab:active{transform:scale(.95)}
 .fab svg{width:28px;height:28px;fill:#A04F49}
+.fab.show{display:flex}
 
 
 </style>
@@ -399,6 +400,7 @@ function navigate(page){
   else if(page==='bills')renderBills();
   else if(page==='assets')renderAssets();
   else if(page==='budget')renderBudget();
+  const fab=document.querySelector('.fab');if(fab)fab.classList.toggle('show',page==='calendar');
 }
 
 // 類別圖標輔助 (回滚 v25 后从原版恢复)
