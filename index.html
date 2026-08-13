@@ -356,6 +356,7 @@ const TZ={
   parse(s){if(!s)return{y:0,m:0,d:0};const m=(''+s).match(/(\d{4})-?(\d{2})-?(\d{2})/);return m?{y:+m[1],m:+m[2],d:+m[3]}:{y:0,m:0,d:0}},
   weekRange(){const d=this.now();const wd=d.getDay();const diff=wd===0?6:wd-1;const mon=new Date(d);mon.setDate(d.getDate()-diff);const sun=new Date(mon);sun.setDate(mon.getDate()+6);const f=x=>x.getFullYear()+'-'+String(x.getMonth()+1).padStart(2,'0')+'-'+String(x.getDate()).padStart(2,'0');return{start:f(mon),end:f(sun)}},
   weekStart(s){const p=this.parse(s);if(!p.y)return s;const d=new Date(p.y,p.m-1,p.d);const wd=d.getDay();const diff=wd===0?6:wd-1;d.setDate(d.getDate()-diff);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')},
+  sundayStart(s){const p=this.parse(s);if(!p.y)return s;const d=new Date(p.y,p.m-1,p.d);const wd=d.getDay();d.setDate(d.getDate()-wd);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')},
   addDays(s,n){const p=this.parse(s);const d=new Date(p.y,p.m-1,p.d);d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')},
   monthStart(s){const p=this.parse(s);return p.y+'-'+String(p.m).padStart(2,'0')+'-01'},
   addMonths(s,n){const p=this.parse(s);if(!p.y)return s;let m=p.m+n,y=p.y;while(m>12){m-=12;y++}while(m<1){m+=12;y--}return y+'-'+String(m).padStart(2,'0')+'-01'},
@@ -725,7 +726,7 @@ function inBudget(tx,bOverride){
 function getWeeklyBudget(ws,bOverride){
   const b=bOverride||DB.getBudget();
   let total=(b.weeklyBase!=null)?b.weeklyBase:(b.weekly?.total||0);
-  const hist=(b.weeklyHistory||[]).slice().sort((a,c)=>a.since<c.since?-1:(a.since>c.since?1:0));
+  const hist=(b.weeklyHistory||[]).map(r=>({since:TZ.sundayStart(r.since),total:r.total})).sort((a,c)=>a.since<c.since?-1:(a.since>c.since?1:0));
   for(const rec of hist){if(rec.since<=ws)total=rec.total}
   return total;
 }
@@ -739,10 +740,10 @@ function getMonthlyBudget(ym,bOverride){
 function getScope(name,dflt){const el=document.querySelector('input[name="'+name+'"]:checked');return el?el.value:dflt;}
 function buildBudgetAfterEdit(wt,mt,scopeWk,scopeMo){
   const b=JSON.parse(JSON.stringify(DB.getBudget()));
-  const curMonday=TZ.weekRange().start;
+  const curSun=TZ.sundayStart(TZ.today());
   const curMonthFirst=TZ.nowY()+'-'+String(TZ.nowM()).padStart(2,'0')+'-01';
   if(scopeWk==='all'){b.weeklyBase=wt;b.weeklyHistory=[]}
-  else{b.weeklyBase=(b.weeklyBase!=null)?b.weeklyBase:(b.weekly?.total||0);b.weeklyHistory=b.weeklyHistory||[];const last=b.weeklyHistory[b.weeklyHistory.length-1];if(last&&last.since===curMonday)last.total=wt;else b.weeklyHistory.push({since:curMonday,total:wt})}
+  else{b.weeklyBase=(b.weeklyBase!=null)?b.weeklyBase:(b.weekly?.total||0);b.weeklyHistory=b.weeklyHistory||[];const last=b.weeklyHistory[b.weeklyHistory.length-1];if(last&&last.since===curSun)last.total=wt;else b.weeklyHistory.push({since:curSun,total:wt})}
   if(scopeMo==='all'){b.monthlyBase=mt;b.monthlyHistory=[]}
   else{b.monthlyBase=(b.monthlyBase!=null)?b.monthlyBase:(b.monthly?.total||0);b.monthlyHistory=b.monthlyHistory||[];const last=b.monthlyHistory[b.monthlyHistory.length-1];if(last&&last.since===curMonthFirst)last.total=mt;else b.monthlyHistory.push({since:curMonthFirst,total:mt})}
   b.weekly={total:wt};b.monthly={total:mt};
@@ -752,29 +753,29 @@ function computeWeekCarry(tracked,bOverride){
   const b=bOverride||DB.getBudget();
   const txs=DB.getTx();
   const txsInScope=txs.filter(t=>t.type==='expense'&&inBudget(t,b));
-  const cur=TZ.weekRange();
+  const curSun=TZ.sundayStart(TZ.today());
   // 起始週（若用户未指定，默认当月第一个周日）
   const curYM=TZ.nowY()+'-'+String(TZ.nowM()).padStart(2,'0');
   const suns=TZ.sundaysOfMonth(TZ.nowY(),TZ.nowM());
-  const defaultStart=suns[0]||cur.start;
+  const defaultStart=suns[0]||curSun;
   const weekStartStr=(b.weekStartByMonth&&b.weekStartByMonth[curYM])||defaultStart;
-  const weekStart=TZ.weekStart(weekStartStr);
-  if(txsInScope.length===0)return{carry:0,weekSpent:0,thisAvail:getWeeklyBudget(cur.start,b),thisStart:cur.start,weekStartStr:weekStartStr};
-  const firstWeekStart=TZ.weekStart(txsInScope.map(t=>t.date).sort()[0]);
-  // loopStart 取「最早有支出的周」与「起始週」的较大值，确保起始週之前的周不算結轉累积
+  const weekStart=TZ.sundayStart(weekStartStr);
+  if(txsInScope.length===0)return{carry:0,weekSpent:0,thisAvail:getWeeklyBudget(curSun,b),thisStart:curSun,weekStartStr:weekStartStr};
+  const firstWeekStart=TZ.sundayStart(txsInScope.map(t=>t.date).sort()[0]);
+  // loopStart 取「最早有支出的周(周日)」与「起始週(周日)」的较大值，確保起始週之前的周不算結轉累積
   const loopStart=firstWeekStart<weekStart?weekStart:firstWeekStart;
   const weekSpentMap={};
-  txsInScope.forEach(t=>{const ws=TZ.weekStart(t.date);weekSpentMap[ws]=(weekSpentMap[ws]||0)+FX.toTWD(t.amount,t.currency)});
+  txsInScope.forEach(t=>{const ws=TZ.sundayStart(t.date);weekSpentMap[ws]=(weekSpentMap[ws]||0)+FX.toTWD(t.amount,t.currency)});
   let carry=0,ws=loopStart,thisAvail=0,thisWeekSpent=0;
-  while(ws<=cur.start){
+  while(ws<=curSun){
     const spent=weekSpentMap[ws]||0;
     const available=getWeeklyBudget(ws,b)+carry;
-    if(ws===cur.start){thisWeekSpent=spent;thisAvail=available}
+    if(ws===curSun){thisWeekSpent=spent;thisAvail=available}
     carry=available-spent;
     if(Math.abs(carry)>1e9)break;
     ws=TZ.addDays(ws,7);
   }
-  return{carry:thisAvail-getWeeklyBudget(cur.start,b),weekSpent:thisWeekSpent,thisAvail:thisAvail,thisStart:cur.start,weekStartStr:weekStartStr};
+  return{carry:thisAvail-getWeeklyBudget(curSun,b),weekSpent:thisWeekSpent,thisAvail:thisAvail,thisStart:curSun,weekStartStr:weekStartStr};
 }
 
 function computeMonthCarry(tracked,bOverride){
@@ -881,10 +882,14 @@ function previewMonthlyBudget(){
 function renderBudget(){
   const b=DB.getBudget(),txs=DB.getTx(),tracked=b.trackedCats||[];
   // 起始週 select 用的當月週日列表
-  const suns=TZ.sundaysOfMonth(TZ.nowY(),TZ.nowM());
   const curYM=TZ.nowY()+'-'+String(TZ.nowM()).padStart(2,'0');
+  const curM=TZ.nowM(),curY=TZ.nowY();
+  const prevM=curM===1?12:curM-1,prevY=curM===1?curY-1:curY;
+  const prevSuns=TZ.sundaysOfMonth(prevY,prevM);
+  const suns=TZ.sundaysOfMonth(curY,curM);
   const savedWkStart=(b.weekStartByMonth&&b.weekStartByMonth[curYM])||suns[0];
-  const wkStartOptions=suns.map(s=>'<option value="'+s+'" '+(s===savedWkStart?'selected':'')+'>'+s.substring(5).replace('-','/')+'</option>').join('');
+  const allSuns=[...prevSuns,...suns];
+  const wkStartOptions=allSuns.map(s=>'<option value="'+s+'" '+(s===savedWkStart?'selected':'')+'>'+s.substring(5).replace('-','/')+(s.indexOf((prevY+'-'+String(prevM).padStart(2,'0')+'/'))===0?' (上月)':'')+'</option>').join('');
   const wr=TZ.weekRange(),yc=computeWeekCarry(tracked);
   const wu=yc.weekSpent;
   const wAvailable=yc.thisAvail;
