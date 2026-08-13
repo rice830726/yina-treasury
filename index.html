@@ -313,6 +313,7 @@ ul,li{list-style:none}a{text-decoration:none;color:inherit}
 
 
 .scope-row{display:flex;align-items:center;gap:8px;margin-top:8px;flex-wrap:wrap}
+.week-start-hint{font-size:11px;color:var(--gray-500);margin-top:4px;line-height:1.4}
 .scope-label{font-size:12px;color:#A04F49;font-weight:600}
 .scope-opt{display:inline-flex;align-items:center;gap:3px;font-size:12px;color:#7a5a55;cursor:pointer;user-select:none}
 .scope-opt input{accent-color:#FBD8D9;width:14px;height:14px;margin:0}
@@ -357,7 +358,8 @@ const TZ={
   weekStart(s){const p=this.parse(s);if(!p.y)return s;const d=new Date(p.y,p.m-1,p.d);const wd=d.getDay();const diff=wd===0?6:wd-1;d.setDate(d.getDate()-diff);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')},
   addDays(s,n){const p=this.parse(s);const d=new Date(p.y,p.m-1,p.d);d.setDate(d.getDate()+n);return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0')},
   monthStart(s){const p=this.parse(s);return p.y+'-'+String(p.m).padStart(2,'0')+'-01'},
-  addMonths(s,n){const p=this.parse(s);if(!p.y)return s;let m=p.m+n,y=p.y;while(m>12){m-=12;y++}while(m<1){m+=12;y--}return y+'-'+String(m).padStart(2,'0')+'-01'}
+  addMonths(s,n){const p=this.parse(s);if(!p.y)return s;let m=p.m+n,y=p.y;while(m>12){m-=12;y++}while(m<1){m+=12;y--}return y+'-'+String(m).padStart(2,'0')+'-01'},
+  sundaysOfMonth(y,m){const days=[];for(let d=1;d<=31;d++){const dt=new Date(y,m-1,d);if(dt.getMonth()!==m-1)break;if(dt.getDay()===0)days.push(dt.getFullYear()+'-'+String(dt.getMonth()+1).padStart(2,'0')+'-'+String(dt.getDate()).padStart(2,'0'))}return days}
 };
 const DB={
   _g(k,def){const v=localStorage.getItem(P+k);return v==null?def:JSON.parse(v)},
@@ -748,27 +750,31 @@ function buildBudgetAfterEdit(wt,mt,scopeWk,scopeMo){
 }
 function computeWeekCarry(tracked,bOverride){
   const b=bOverride||DB.getBudget();
-  // 算出所有有支出的周的周一日期
   const txs=DB.getTx();
   const txsInScope=txs.filter(t=>t.type==='expense'&&inBudget(t,b));
-  if(txsInScope.length===0)return{carry:0,weekSpent:0,thisAvail:getWeeklyBudget(TZ.weekRange().start,b),thisStart:TZ.weekRange().start};
   const cur=TZ.weekRange();
+  // 起始週（若用户未指定，默认当月第一个周日）
+  const curYM=TZ.nowY()+'-'+String(TZ.nowM()).padStart(2,'0');
+  const suns=TZ.sundaysOfMonth(TZ.nowY(),TZ.nowM());
+  const defaultStart=suns[0]||cur.start;
+  const weekStartStr=(b.weekStartByMonth&&b.weekStartByMonth[curYM])||defaultStart;
+  const weekStart=TZ.weekStart(weekStartStr);
+  if(txsInScope.length===0)return{carry:0,weekSpent:0,thisAvail:getWeeklyBudget(cur.start,b),thisStart:cur.start,weekStartStr:weekStartStr};
   const firstWeekStart=TZ.weekStart(txsInScope.map(t=>t.date).sort()[0]);
-  // 从 firstWeekStart 迭代到 cur.start（用 addDays +7 检查）
-  // 先按周聚合支出
+  // loopStart 取「最早有支出的周」与「起始週」的较大值，确保起始週之前的周不算結轉累积
+  const loopStart=firstWeekStart<weekStart?weekStart:firstWeekStart;
   const weekSpentMap={};
   txsInScope.forEach(t=>{const ws=TZ.weekStart(t.date);weekSpentMap[ws]=(weekSpentMap[ws]||0)+FX.toTWD(t.amount,t.currency)});
-  // 滚动迭代
-  let carry=0,ws=firstWeekStart,thisAvail=0,thisWeekSpent=0;
+  let carry=0,ws=loopStart,thisAvail=0,thisWeekSpent=0;
   while(ws<=cur.start){
     const spent=weekSpentMap[ws]||0;
     const available=getWeeklyBudget(ws,b)+carry;
     if(ws===cur.start){thisWeekSpent=spent;thisAvail=available}
     carry=available-spent;
-    if(carry>1e9)break;// 防御
+    if(Math.abs(carry)>1e9)break;
     ws=TZ.addDays(ws,7);
   }
-  return{carry:thisAvail-getWeeklyBudget(cur.start,b),weekSpent:thisWeekSpent,thisAvail:thisAvail,thisStart:cur.start};
+  return{carry:thisAvail-getWeeklyBudget(cur.start,b),weekSpent:thisWeekSpent,thisAvail:thisAvail,thisStart:cur.start,weekStartStr:weekStartStr};
 }
 
 function computeMonthCarry(tracked,bOverride){
@@ -874,12 +880,17 @@ function previewMonthlyBudget(){
 }
 function renderBudget(){
   const b=DB.getBudget(),txs=DB.getTx(),tracked=b.trackedCats||[];
+  // 起始週 select 用的當月週日列表
+  const suns=TZ.sundaysOfMonth(TZ.nowY(),TZ.nowM());
+  const curYM=TZ.nowY()+'-'+String(TZ.nowM()).padStart(2,'0');
+  const savedWkStart=(b.weekStartByMonth&&b.weekStartByMonth[curYM])||suns[0];
+  const wkStartOptions=suns.map(s=>'<option value="'+s+'" '+(s===savedWkStart?'selected':'')+'>'+s.substring(5).replace('-','/')+'</option>').join('');
   const wr=TZ.weekRange(),yc=computeWeekCarry(tracked);
   const wu=yc.weekSpent;
   const wAvailable=yc.thisAvail;
   const y=TZ.nowY(),m=TZ.nowM();let mu=0;const cu={};
   txs.forEach(t=>{if(t.type==='expense'&&inBudget(t)){const p=TZ.parse(t.date);if(p.y===y&&p.m===m){const v=FX.toTWD(t.amount,t.currency);mu+=v;if(b.catBudgets&&b.catBudgets[t.categoryId])cu[t.categoryId]=(cu[t.categoryId]||0)+v}}});
-  let h='<div class="card"><div class="card-title"><div class="left">週預算</div></div><div class="form-group"><label>本週總預算 (TWD)</label><input type="number" id="bpWeekTotal" value="'+(b.weekly?.total||0)+'" step="100" min="0" oninput="previewWeeklyBudget()"><div class="scope-row"><span class="scope-label">套用範圍</span><label class="scope-opt"><input type="radio" name="wkScope" value="this" checked onchange="previewWeeklyBudget()">只從本週開始</label><label class="scope-opt"><input type="radio" name="wkScope" value="all" onchange="previewWeeklyBudget()">全部週數</label></div></div>';
+  let h='<div class="card"><div class="card-title"><div class="left">週預算</div></div><div class="form-group"><label>本週總預算 (TWD)</label><input type="number" id="bpWeekTotal" value="'+(b.weekly?.total||0)+'" step="100" min="0" oninput="previewWeeklyBudget()"><div class="scope-row"><span class="scope-label">套用範圍</span><label class="scope-opt"><input type="radio" name="wkScope" value="this" checked onchange="previewWeeklyBudget()">只從本週開始</label><label class="scope-opt"><input type="radio" name="wkScope" value="all" onchange="previewWeeklyBudget()">全部週數</label><span class="scope-label" style="margin-left:auto">起始週</span><select id="bpWeekStart" onchange="saveWeekStart()" style="font-size:12px;padding:3px 6px;border:1px solid var(--gray-200);border-radius:6px;background:white">'+wkStartOptions+'</select></div><div style="font-size:11px;color:var(--gray-500);margin-top:2px">之前的週不算入結轉累積</div></div>';
   h+=renderBp('本週已花',wu,wAvailable);
   if(yc.carry!==0){const tag=yc.carry>0?'含上週盈餘結轉 +':'含上週超支扣減 -';h+='<div class="bp-remaining">'+(wAvailable>=wu?'':' ')+tag+' '+FX.fmtTWD(Math.abs(yc.carry))+'</div>'}
   h+='</div>';
@@ -903,6 +914,19 @@ function renderCatBudgets(cb,cu){const cats=DB.getCat().filter(c=>c.type==='expe
 }
 function addCatBudget(){const cats=DB.getCat().filter(c=>c.type==='expense');const b=DB.getBudget();const ex=Object.keys(b.catBudgets||{});const av=cats.filter(c=>!ex.includes(c.id));if(av.length===0){toast('所有支出類別都已設置預算');return}b.catBudgets=b.catBudgets||{};b.catBudgets[av[0].id]=1000;DB.setBudget(b);renderBudget()}
 function removeCatBudget(cid){const b=DB.getBudget();delete b.catBudgets[cid];DB.setBudget(b);renderBudget()}
+function saveWeekStart(){
+  const el=document.getElementById('bpWeekStart');
+  if(!el)return;
+  const v=el.value;
+  if(!v)return;
+  const b=DB.getBudget();
+  b.weekStartByMonth=b.weekStartByMonth||{};
+  const curYM=TZ.nowY()+'-'+String(TZ.nowM()).padStart(2,'0');
+  b.weekStartByMonth[curYM]=v;
+  DB.setBudget(b);
+  renderBudget();
+  toast('起始週已更新');
+}
 function saveBudget(){
   const wt=parseFloat(document.getElementById('bpWeekTotal').value)||0,mt=parseFloat(document.getElementById('bpMonthTotal').value)||0;
   const tracked=[];const expCats=DB.getCat().filter(c=>c.type==='expense');
